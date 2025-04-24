@@ -4,15 +4,18 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/hex"
 	"log"
 	"net/http"
 	"os"
+	"sync"
 
 	"github.com/joho/godotenv"
 )
 
 var (
 	urlStore  = make(map[string]string)
+	mu        sync.Mutex
 	secretKey string
 )
 
@@ -44,6 +47,8 @@ func encrypt(initial_url string) string {
 	stream := cipher.NewCTR(block, iv)
 
 	stream.XORKeyStream(chipherText[aes.BlockSize:], plainText)
+
+	return hex.EncodeToString(chipherText)
 }
 
 func shorterUrl(w http.ResponseWriter, r *http.Request) {
@@ -54,4 +59,7 @@ func shorterUrl(w http.ResponseWriter, r *http.Request) {
 	}
 
 	encrypted_url := encrypt(initial_url)
+	mu.Lock()
+	urlStore[encrypted_url] = initial_url
+	mu.Unlock()
 }
