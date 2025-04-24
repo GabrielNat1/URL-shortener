@@ -5,7 +5,9 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"sync"
@@ -14,10 +16,11 @@ import (
 )
 
 var (
-	urlStore  = make(map[string]string)
-	mu        = sync.Mutex
-	secretKey = []byte
-	lettersRune = []rune ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+	mu        sync.Mutex
+	secretKey string
+
+	urlStore    = make(map[string]string)
+	lettersRune = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 )
 
 func init() {
@@ -55,12 +58,16 @@ func encrypt(initial_url string) string {
 func generateShortId() string {
 	b := make([]rune, 6)
 	for i := range b {
-		num, err := errrand.Int(rand.Reader,Big.NewInt(int64(len(lettersRune))))
+		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(lettersRune))))
 		if err != nil {
 			log.Fatal(err)
 		}
 
 		b[i] = lettersRune[num.Int64()]
+	}
+
+	return string(b)
+}
 
 func shorterUrl(w http.ResponseWriter, r *http.Request) {
 	initial_url := r.URL.Query().Get("url")
@@ -70,7 +77,12 @@ func shorterUrl(w http.ResponseWriter, r *http.Request) {
 	}
 
 	encrypted_url := encrypt(initial_url)
+	short_id := generateShortId()
 	mu.Lock()
-	urlStore[encrypted_url] = initial_url
+	urlStore[short_id] = encrypted_url
 	mu.Unlock()
+
+	shortUrl := fmt.Sprintf("http://localhost:8080/%s", short_id)
+	//w.Write([]byte(shortUrl))
+	fmt.Fprintf(w, "This is the shortened : %s", shortUrl)
 }
