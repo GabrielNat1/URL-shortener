@@ -15,8 +15,9 @@ import (
 
 var (
 	urlStore  = make(map[string]string)
-	mu        sync.Mutex
-	secretKey string
+	mu        = sync.Mutex
+	secretKey = []byte
+	lettersRune = []rune ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 )
 
 func init() {
@@ -50,6 +51,16 @@ func encrypt(initial_url string) string {
 
 	return hex.EncodeToString(chipherText)
 }
+
+func generateShortId() string {
+	b := make([]rune, 6)
+	for i := range b {
+		num, err := errrand.Int(rand.Reader,Big.NewInt(int64(len(lettersRune))))
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		b[i] = lettersRune[num.Int64()]
 
 func shorterUrl(w http.ResponseWriter, r *http.Request) {
 	initial_url := r.URL.Query().Get("url")
