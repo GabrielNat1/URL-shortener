@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"log"
 	"net/http"
 	"os"
@@ -22,10 +25,25 @@ func init() {
 	secretKey = os.Getenv("SECRET_KEY")
 }
 
-func encrypt(url string) string {
+func encrypt(initial_url string) string {
 	// -----------------------------------
 
-	//aes.NewCipher
+	block, err := aes.NewCipher([]byte(secretKey))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	plainText := []byte(initial_url)
+	chipherText := make([]byte, aes.BlockSize+len(plainText))
+
+	iv := chipherText[:aes.BlockSize]
+	if _, err := rand.Read(iv); err != nil {
+		log.Fatal(err)
+	}
+
+	stream := cipher.NewCTR(block, iv)
+
+	stream.XORKeyStream(chipherText[aes.BlockSize:], plainText)
 }
 
 func shorterUrl(w http.ResponseWriter, r *http.Request) {
