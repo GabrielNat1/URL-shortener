@@ -112,7 +112,12 @@ func redirectHandler(w http.ResponseWriter, r *http.Request) {
 
 	mu.Lock()
 	urlEntry, ok := urlStore[shortId]
-	expiresAt, _ := time.Parse(time.RFC3339, urlEntry.ExpiresAt)
+	expiresAt, err := time.Parse(time.RFC3339, urlEntry.ExpiresAt)
+	if err != nil {
+		http.Error(w, "Invalid expiration format", http.StatusInternalServerError)
+		return
+	}
+
 	if ok && time.Now().After(expiresAt) {
 		delete(urlStore, shortId)
 		mu.Unlock()
