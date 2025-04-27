@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
@@ -18,9 +19,16 @@ import (
 	"github.com/joho/godotenv"
 )
 
+type URLStats struct {
+	Visits    int       `json:"visits"`
+	LastVisit time.Time `json:"last_visit"`
+	UserAgent []string  `json:"user_agent"`
+}
+
 type Url struct {
 	EncryptedURL string
 	ExpiresAt    string
+	Stats        URLStats
 }
 
 var (
@@ -44,6 +52,7 @@ func main() {
 	cleanupExpiredUrls()
 
 	http.HandleFunc("/shorten", shorterUrl)
+	http.HandleFunc("/stats/", statsHandler)
 	http.HandleFunc("/", redirectHandler)
 
 	fmt.Println("Server started at :8080")
@@ -124,16 +133,29 @@ func redirectHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "URL has expired", http.StatusGone)
 		return
 	}
-	mu.Unlock()
 
 	if !ok {
 		http.Error(w, "URL not found", http.StatusNotFound)
 		return
 	}
 
+	// Update stats
+	urlEntry.Stats.Visits++
+	urlEntry.Stats.LastVisit = time.Now()
+	userAgent := r.UserAgent()
+	if !contains(urlEntry.Stats.UserAgent, userAgent) {
+		urlEntry.Stats.UserAgent = append(urlEntry.Stats.UserAgent, userAgent)
+	}
+
+	urlStore[shortId] = urlEntry
+	mu.Unlock()
+
+	/* Redirect to the original URL
+	   Decrypt the URL before redirecting */
 	decryptedUrl := decrypt(urlEntry.EncryptedURL)
 	http.Redirect(w, r, decryptedUrl, http.StatusFound)
 }
+
 func cleanupExpiredUrls() {
 	ticker := time.NewTicker(10 * time.Minute)
 	go func() {
@@ -148,6 +170,45 @@ func cleanupExpiredUrls() {
 			mu.Unlock()
 		}
 	}()
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return s == item
+		}
+	}
+	return false
+}
+
+func statsHandler(w http.ResponseWriter, r *http.Request) {
+	shortId := r.URL.Path[1:]
+
+	mu.Lock()
+	urlEntry, ok := urlStore[shortId]
+	mu.Unlock()
+
+	if !ok {
+		http.Error(w, "URL not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	stats := struct {
+		ShortURL   string    `json:"short_url"`
+		Visits     int       `json:"visits"`
+		LastVisit  time.Time `json:"last_visit"`
+		UserAgent  []string  `json:"user_agent"`
+		Expiration string    `json:"expiration"`
+	}{
+		ShortURL:   fmt.Sprintf("http://localhost:8080/%s", shortId),
+		Visits:     urlEntry.Stats.Visits,
+		LastVisit:  urlEntry.Stats.LastVisit,
+		UserAgent:  urlEntry.Stats.UserAgent,
+		Expiration: urlEntry.ExpiresAt,
+	}
+
+	json.NewEncoder(w).Encode(stats)
 }
 
 func shorterUrl(w http.ResponseWriter, r *http.Request) {
@@ -186,8 +247,8 @@ func shorterUrl(w http.ResponseWriter, r *http.Request) {
 	mu.Unlock()
 
 	shortUrl := fmt.Sprintf("http://localhost:8080/%s", short_id)
-	//w.Write([]byte(shortUrl))
-	//fmt.Fprintf(w, "This is the shortened : %s", shortUrl)
+	/*w.Write([]byte(shortUrl))
+	  fmt.Fprintf(w, "This is the shortened : %s", shortUrl) */
 
 	fmt.Fprintf(w, "This is the shortened URL: %s (expires in %d minutes)", shortUrl, expirationMinutes)
 }
