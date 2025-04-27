@@ -10,16 +10,22 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/joho/godotenv"
 )
 
-var (
-	mu        sync.Mutex
-	secretKey string
+type Url struct {
+	EncryptedURL string
+	ExpiresAt    string
+}
 
+var (
+	mu          sync.Mutex
+	secretKey   string
 	urlStore    = make(map[string]string)
 	lettersRune = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 )
@@ -31,6 +37,8 @@ func main() {
 	}
 
 	secretKey = os.Getenv("SECRET_KEY")
+
+	cleanupExpiredUrls()
 
 	http.HandleFunc("/shorten", shorterUrl)
 	http.HandleFunc("/", redirectHandler)
@@ -101,6 +109,10 @@ func redirectHandler(w http.ResponseWriter, r *http.Request) {
 
 	mu.Lock()
 	encryptedUrl, ok := urlStore[shortId]
+	if ok && time.Now().After(urlEntry.ExpiresAt) {
+		delete(urlStore, shortId)
+		ok = false
+	}
 	mu.Unlock()
 
 	if !ok {
@@ -112,8 +124,34 @@ func redirectHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, decryptedUrl, http.StatusFound)
 }
 
+func cleanupExpiredUrls() {
+	ticker := time.NewTicker(10 * time.Minute)
+	go func() {
+		for range ticker.C {
+			mu.Lock()
+			for id, entry := range urlStore {
+				if time.Now().After(entry.ExpiresAt) {
+					delete(urlStore, id)
+				}
+			}
+			mu.Unlock()
+		}
+	}()
+}
+
 func shorterUrl(w http.ResponseWriter, r *http.Request) {
 	initial_url := r.URL.Query().Get("url")
+
+	expirationStr := r.URL.Query().Get("expires_at")
+	expirationMinutes := 24 * 60
+
+	if expirationStr != "" {
+		parsed, err := strconv.Atoi(expirationStr)
+		if err == nil && parsed > 0 {
+			expirationMinutes = parsed
+		}
+	}
+
 	if initial_url == "" {
 		http.Error(w, "URL is required", http.StatusBadRequest)
 		return
@@ -134,5 +172,6 @@ func shorterUrl(w http.ResponseWriter, r *http.Request) {
 
 	shortUrl := fmt.Sprintf("http://localhost:8080/%s", short_id)
 	//w.Write([]byte(shortUrl))
-	fmt.Fprintf(w, "This is the shortened : %s", shortUrl)
+	//fmt.Fprintf(w, "This is the shortened : %s", shortUrl)
+	fmt.Fprintf(w, "This is the shortened URL: %s (expires in %d minutes)", shortUrl, expirationMinutes)
 }
