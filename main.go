@@ -26,7 +26,7 @@ type Url struct {
 var (
 	mu          sync.Mutex
 	secretKey   string
-	urlStore    = make(map[string]string)
+	urlStore    = make(map[string]Url)
 	lettersRune = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 )
 
@@ -37,6 +37,9 @@ func main() {
 	}
 
 	secretKey = os.Getenv("SECRET_KEY")
+	if len(secretKey) != 16 && len(secretKey) != 24 && len(secretKey) != 32 {
+		log.Fatal("SECRET_KEY must be 16, 24, or 32 bytes long")
+	}
 
 	cleanupExpiredUrls()
 
@@ -56,18 +59,18 @@ func encrypt(initial_url string) string {
 	}
 
 	plainText := []byte(initial_url)
-	chipherText := make([]byte, aes.BlockSize+len(plainText))
+	cipherText := make([]byte, aes.BlockSize+len(plainText))
 
-	iv := chipherText[:aes.BlockSize]
+	iv := cipherText[:aes.BlockSize]
 	if _, err := rand.Read(iv); err != nil {
 		log.Fatal(err)
 	}
 
 	stream := cipher.NewCTR(block, iv)
 
-	stream.XORKeyStream(chipherText[aes.BlockSize:], plainText)
+	stream.XORKeyStream(cipherText[aes.BlockSize:], plainText)
 
-	return hex.EncodeToString(chipherText)
+	return hex.EncodeToString(cipherText)
 }
 
 func decrypt(encrypted_url string) string {
@@ -76,18 +79,18 @@ func decrypt(encrypted_url string) string {
 		log.Fatal(err)
 	}
 
-	chiperText, err := hex.DecodeString(encrypted_url)
+	cipherText, err := hex.DecodeString(encrypted_url)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	iv := chiperText[:aes.BlockSize]
-	chiperText = chiperText[aes.BlockSize:]
+	iv := cipherText[:aes.BlockSize]
+	cipherText = cipherText[aes.BlockSize:]
 
 	stream := cipher.NewCTR(block, iv)
-	stream.XORKeyStream(chiperText, chiperText)
+	stream.XORKeyStream(cipherText, cipherText)
 
-	return string(chiperText)
+	return string(cipherText)
 }
 
 func generateShortId() string {
@@ -108,10 +111,13 @@ func redirectHandler(w http.ResponseWriter, r *http.Request) {
 	shortId := r.URL.Path[1:]
 
 	mu.Lock()
-	encryptedUrl, ok := urlStore[shortId]
-	if ok && time.Now().After(urlEntry.ExpiresAt) {
+	urlEntry, ok := urlStore[shortId]
+	expiresAt, _ := time.Parse(time.RFC3339, urlEntry.ExpiresAt)
+	if ok && time.Now().After(expiresAt) {
 		delete(urlStore, shortId)
-		ok = false
+		mu.Unlock()
+		http.Error(w, "URL has expired", http.StatusGone)
+		return
 	}
 	mu.Unlock()
 
@@ -120,17 +126,17 @@ func redirectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	decryptedUrl := decrypt(encryptedUrl)
+	decryptedUrl := decrypt(urlEntry.EncryptedURL)
 	http.Redirect(w, r, decryptedUrl, http.StatusFound)
 }
-
 func cleanupExpiredUrls() {
 	ticker := time.NewTicker(10 * time.Minute)
 	go func() {
 		for range ticker.C {
 			mu.Lock()
 			for id, entry := range urlStore {
-				if time.Now().After(entry.ExpiresAt) {
+				expiresAt, _ := time.Parse(time.RFC3339, entry.ExpiresAt)
+				if time.Now().After(expiresAt) {
 					delete(urlStore, id)
 				}
 			}
@@ -160,18 +166,23 @@ func shorterUrl(w http.ResponseWriter, r *http.Request) {
 	// => Validate URL format (basic check)
 	if !(strings.HasPrefix(initial_url, "http://") || strings.HasPrefix(initial_url, "https://")) {
 		http.Error(w, "Invalid URL format. URL must start with http:// or https://", http.StatusBadRequest)
-
 		return
 	}
 
 	encrypted_url := encrypt(initial_url)
 	short_id := generateShortId()
+	expiresAt := time.Now().Add(time.Duration(expirationMinutes) * time.Minute).Format(time.RFC3339)
+
 	mu.Lock()
-	urlStore[short_id] = encrypted_url
+	urlStore[short_id] = Url{
+		EncryptedURL: encrypted_url,
+		ExpiresAt:    expiresAt,
+	}
 	mu.Unlock()
 
 	shortUrl := fmt.Sprintf("http://localhost:8080/%s", short_id)
 	//w.Write([]byte(shortUrl))
 	//fmt.Fprintf(w, "This is the shortened : %s", shortUrl)
+
 	fmt.Fprintf(w, "This is the shortened URL: %s (expires in %d minutes)", shortUrl, expirationMinutes)
 }
