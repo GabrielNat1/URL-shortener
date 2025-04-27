@@ -17,7 +17,15 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"golang.org/x/time/rate"
 )
+
+type IPRateLimiter struct {
+	ips map[string]*rate.Limiter
+	mu  sync.Mutex
+	r   rate.Limit
+	b   int
+}
 
 type URLStats struct {
 	Visits    int       `json:"visits"`
@@ -38,6 +46,49 @@ var (
 	lettersRune = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 )
 
+func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
+	return &IPRateLimiter{
+		ips: make(map[string]*rate.Limiter),
+		r:   r,
+		b:   b,
+	}
+}
+
+func (i *IPRateLimiter) AddIP(ip string) *rate.Limiter {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	limiter := rate.NewLimiter(i.r, i.b)
+	i.ips[ip] = limiter
+	return limiter
+}
+
+func (i *IPRateLimiter) GetIP(ip string) *rate.Limiter {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	limiter, exists := i.ips[ip]
+	if !exists {
+		limiter = rate.NewLimiter(i.r, i.b)
+		i.ips[ip] = limiter
+	}
+	return limiter
+}
+
+func rateLimitMiddleware(next http.HandlerFunc, limiter *IPRateLimiter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ip := r.RemoteAddr
+		limiter := limiter.GetIP(ip)
+
+		if !limiter.Allow() {
+			http.Error(w, "Too many requests", http.StatusTooManyRequests)
+			return
+		}
+
+		next(w, r)
+	}
+}
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -49,11 +100,13 @@ func main() {
 		log.Fatal("SECRET_KEY must be 16, 24, or 32 bytes long")
 	}
 
+	limiter := NewIPRateLimiter(1, 5)
+
 	cleanupExpiredUrls()
 
-	http.HandleFunc("/shorten", shorterUrl)
-	http.HandleFunc("/stats/", statsHandler)
-	http.HandleFunc("/", redirectHandler)
+	http.HandleFunc("/shorten", rateLimitMiddleware(shorterUrl, limiter))
+	http.HandleFunc("/stats/", rateLimitMiddleware(statsHandler, limiter))
+	http.HandleFunc("/", rateLimitMiddleware(redirectHandler, limiter))
 
 	fmt.Println("Server started at :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
