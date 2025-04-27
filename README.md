@@ -1,80 +1,115 @@
 # URL Shortener
 
-A simple URL shortener service written in Go that encrypts URLs and generates short IDs for them.
+A secure URL shortener service written in Go with rate limiting, encryption, and automatic cleanup.
 
 ## Features
 
-- URL shortening with AES encryption
-- Configurable URL expiration time
-- URL statistics tracking (visits, last visit, user agents)
-- Automatic cleanup of expired URLs
-- Secure random short ID generation
-- Basic URL validation
-- URL redirection
+- **URL Shortening**
+  - Generates 6-character random short IDs
+  - Supports custom expiration times
+  - Basic URL format validation
+  - AES encryption for URL storage
+
+- **Security**
+  - Rate limiting per IP (1 request/second, burst of 5)
+  - AES-CTR encryption for stored URLs
+  - Environment-based secret key configuration
+  - Thread-safe operations using mutex
+
+- **Statistics**
+  - Track number of visits
+  - Record last visit timestamp
+  - Log unique user agents
+  - View URL expiration time
+
+- **Maintenance**
+  - Automatic cleanup of expired URLs every 10 minutes
+  - Configurable URL expiration (default 24 hours)
 
 ## Requirements
 
 - Go 1.24+
 - Environment variables setup (.env file)
 
-## Setup
+## Installation
 
 1. Clone the repository
-2. Create a `.env` file in the root directory with your secret key:
+2. Install dependencies:
+```bash
+go mod tidy
 ```
-SECRET_KEY=your-secret-key
-```
-Note: The secret key must be either 16, 24, or 32 bytes long for AES encryption.
 
-3. Run `go mod tidy` to install dependencies
+3. Create a `.env` file:
+```env
+SECRET_KEY=your-32-byte-secret-key
+```
+Note: SECRET_KEY must be 16, 24, or 32 bytes long
 
 ## Usage
 
-Start the server:
-```
+1. Start the server:
+```bash
 go run main.go
 ```
 
-The server will start at `http://localhost:8080`
+2. The server starts at `http://localhost:8080`
 
 ### API Endpoints
 
-1. Shorten URL:
-   ```
-   GET /shorten?url=https://your-long-url.com&expires_at=1440
-   ```
-   - `url`: The URL to shorten (required)
-   - `expires_at`: Expiration time in minutes (optional, defaults to 24 hours)
+#### 1. Shorten URL
+```
+GET /shorten?url=https://example.com&expires_at=1440
+```
+Parameters:
+- `url`: The URL to shorten (required)
+- `expires_at`: Expiration time in minutes (optional, default: 1440)
 
-2. Access shortened URL:
-   ```
-   GET /{shortId}
-   ```
+Response:
+```
+This is the shortened URL: http://localhost:8080/Ab3Cd5 (expires in 1440 minutes)
+```
 
-3. Get URL statistics:
-   ```
-   GET /stats/{shortId}
-   ```
-   Returns JSON with:
-   - Number of visits
-   - Last visit timestamp
-   - List of user agents
-   - Expiration time
-   - Short URL
+#### 2. Access URL
+```
+GET /{shortId}
+```
+- Redirects to original URL if valid
+- Returns 410 Gone if expired
+- Returns 404 if not found
 
-## How it works
+#### 3. Get Statistics
+```
+GET /stats/{shortId}
+```
+Returns:
+```json
+{
+    "short_url": "http://localhost:8080/Ab3Cd5",
+    "visits": 10,
+    "last_visit": "2025-04-27T15:30:00Z",
+    "user_agent": ["Mozilla/5.0...", "curl/7.64.1"],
+    "expiration": "2025-04-28T15:30:00Z"
+}
+```
 
-- URLs are encrypted using AES encryption in CTR mode
-- Short IDs are 6 characters long, generated using cryptographically secure random numbers
-- URLs are stored in memory using a thread-safe map with mutex protection
-- URLs automatically expire after a configurable time (default 24 hours)
-- Background task runs every 10 minutes to clean up expired URLs
-- Basic URL validation ensures proper URL format (must start with http:// or https://)
+## Rate Limiting
 
-## Security
+- 1 request per second per IP
+- Burst allowance of 5 requests
+- Returns 429 Too Many Requests when limit exceeded
 
-- Uses AES encryption for URL storage
-- Implements secure random generation for short IDs
-- Thread-safe operations using mutex
-- Environment-based secret key configuration
-- URL expiration for temporary access
+## Security Considerations
+
+- Uses AES-CTR mode for encryption
+- Cryptographically secure random number generation
+- Thread-safe operations
+- Rate limiting prevents abuse
+- Automatic cleanup of expired data
+
+## Error Responses
+
+- 400: Bad Request (Invalid URL format)
+- 404: Not Found
+- 410: Gone (URL expired)
+- 429: Too Many Requests (Rate limit exceeded)
+- 500: Internal Server Error
