@@ -106,6 +106,9 @@ func redirectHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "URL not found", http.StatusNotFound)
 		return
 	}
+
+	decryptedUrl := decrypt(encryptedUrl)
+	http.Redirect(w, r, decryptedUrl, http.StatusFound)
 }
 
 func shorterUrl(w http.ResponseWriter, r *http.Request) {
