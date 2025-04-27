@@ -32,6 +32,7 @@ func main() {
 	secretKey = os.Getenv("SECRET_KEY")
 
 	http.HandleFunc("/shorten", shorterUrl)
+	http.HandleFunc("/", redirectHandler)
 
 	fmt.Println("Server started at :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
@@ -72,6 +73,19 @@ func generateShortId() string {
 	}
 
 	return string(b)
+}
+
+func redirectHandler(w http.ResponseWriter, r *http.Request) {
+	shortId := r.URL.Path[1:]
+
+	mu.Lock()
+	encryptedUrl, ok := urlStore[shortId]
+	mu.Unlock()
+
+	if !ok {
+		http.Error(w, "URL not found", http.StatusNotFound)
+		return
+	}
 }
 
 func shorterUrl(w http.ResponseWriter, r *http.Request) {
