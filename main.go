@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/joho/godotenv"
@@ -115,6 +116,13 @@ func shorterUrl(w http.ResponseWriter, r *http.Request) {
 	initial_url := r.URL.Query().Get("url")
 	if initial_url == "" {
 		http.Error(w, "URL is required", http.StatusBadRequest)
+		return
+	}
+
+	// => Validate URL format (basic check)
+	if !(strings.HasPrefix(initial_url, "http://") || strings.HasPrefix(initial_url, "https://")) {
+		http.Error(w, "Invalid URL format. URL must start with http:// or https://", http.StatusBadRequest)
+
 		return
 	}
 
