@@ -61,6 +61,26 @@ func encrypt(initial_url string) string {
 	return hex.EncodeToString(chipherText)
 }
 
+func decrypt(encrypted_url string) string {
+	block, err := aes.NewCipher([]byte(secretKey))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	chiperText, err := hex.DecodeString(encrypted_url)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	iv := chiperText[:aes.BlockSize]
+	chiperText = chiperText[aes.BlockSize:]
+
+	stream := cipher.NewCTR(block, iv)
+	stream.XORKeyStream(chiperText, chiperText)
+
+	return string(chiperText)
+}
+
 func generateShortId() string {
 	b := make([]rune, 6)
 	for i := range b {
