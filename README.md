@@ -1,6 +1,6 @@
 # URL Shortener
 
-A secure URL shortener service written in Go with rate limiting, encryption, and automatic cleanup.
+A secure URL shortener service written in Go with load balancing, compression, rate limiting, encryption, and automatic cleanup.
 
 ## Features
 
@@ -9,6 +9,12 @@ A secure URL shortener service written in Go with rate limiting, encryption, and
   - Supports custom expiration times
   - Basic URL format validation
   - AES encryption for URL storage
+
+- **Performance & Reliability**
+  - Load balancing across multiple backend servers
+  - Gzip compression support
+  - Panic recovery middleware
+  - Redis caching support (optional)
 
 - **Security**
   - Rate limiting per IP (1 request/second, burst of 5)
@@ -25,10 +31,12 @@ A secure URL shortener service written in Go with rate limiting, encryption, and
 - **Maintenance**
   - Automatic cleanup of expired URLs every 10 minutes
   - Configurable URL expiration (default 24 hours)
+  - Graceful panic recovery
 
 ## Requirements
 
 - Go 1.24+
+- Redis (optional)
 - Environment variables setup (.env file)
 
 ## Installation
@@ -52,7 +60,10 @@ Note: SECRET_KEY must be 16, 24, or 32 bytes long
 go run main.go
 ```
 
-2. The server starts at `http://localhost:8080`
+2. The server starts at `http://localhost:8080` with load balancing across:
+   - http://localhost:8081
+   - http://localhost:8082
+   - http://localhost:8083
 
 ### API Endpoints
 
@@ -92,19 +103,27 @@ Returns:
 }
 ```
 
-## Rate Limiting
+## Features Details
 
+### Load Balancing
+- Round-robin distribution across backend servers
+- Automatic failover support
+- Easy addition of new backend servers
+
+### Compression
+- Gzip compression for all responses
+- Automatic content negotiation
+- Reduces bandwidth usage
+
+### Rate Limiting
 - 1 request per second per IP
 - Burst allowance of 5 requests
 - Returns 429 Too Many Requests when limit exceeded
 
-## Security Considerations
-
-- Uses AES-CTR mode for encryption
-- Cryptographically secure random number generation
-- Thread-safe operations
-- Rate limiting prevents abuse
-- Automatic cleanup of expired data
+### Error Handling
+- Panic recovery middleware prevents server crashes
+- Detailed logging of recovered panics
+- Graceful error responses
 
 ## Error Responses
 
@@ -113,3 +132,12 @@ Returns:
 - 410: Gone (URL expired)
 - 429: Too Many Requests (Rate limit exceeded)
 - 500: Internal Server Error
+
+## Security Considerations
+
+- Uses AES-CTR mode for encryption
+- Cryptographically secure random number generation
+- Thread-safe operations
+- Rate limiting prevents abuse
+- Automatic cleanup of expired data
+- Panic recovery for stability
