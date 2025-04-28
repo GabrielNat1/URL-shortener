@@ -167,10 +167,28 @@ func (i *IPRateLimiter) GetIP(ip string) *rate.Limiter {
 	return limiter
 }
 
+func getRealIP(r *http.Request) (string, error) {
+	// Check X-Forwarded-For header
+	forwardedIP := r.Header.Get("X-Forwarded-For")
+	if forwardedIP != "" {
+		// Get the first IP in case of multiple forwards
+		ips := strings.Split(forwardedIP, ",")
+		return strings.TrimSpace(ips[0]), nil
+	}
+
+	// Fall back to RemoteAddr if no forwarded IP
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return "", err
+	}
+	return ip, nil
+}
+
 func rateLimitMiddleware(next http.HandlerFunc, limiter *IPRateLimiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		ip, err := getRealIP(r)
 		if err != nil {
+			log.Printf("Error getting real IP: %v", err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
