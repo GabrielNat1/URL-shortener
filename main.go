@@ -2,6 +2,7 @@ package main
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -20,9 +21,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/joho/godotenv"
 	"golang.org/x/time/rate"
 )
+
+type Cache struct {
+	client *redis.Client
+}
 
 type LoadBalancer struct {
 	servers []*url.URL
@@ -60,6 +66,26 @@ var (
 	urlStore    = make(map[string]Url)
 	lettersRune = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 )
+
+func NewCache(Addr string) *Cache {
+	client := redis.NewClient(&redis.Options{
+		Addr:         Addr,
+		PoolSize:     10,
+		MinIdleConns: 5,
+	})
+
+	return &Cache{client: client}
+}
+
+func (c *Cache) Set(key string, value interface{}, expiration time.Duration) error {
+	ctx := context.Background()
+	return c.client.Set(ctx, key, value, expiration).Err()
+}
+
+func (c *Cache) Get(key string) (string, error) {
+	ctx := context.Background()
+	return c.client.Get(ctx, key).Result()
+}
 
 func NewLoadBalancer(serversUrls []string) (*LoadBalancer, error) {
 	var servers []*url.URL
@@ -169,9 +195,20 @@ func main() {
 
 	cleanupExpiredUrls()
 
+	lb, err := NewLoadBalancer([]string{
+		"http://localhost:8081",
+		"http://localhost:8082",
+		"http://localhost:8083",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	http.HandleFunc("/shorten", gzipMiddleware(rateLimitMiddleware(shorterUrl, limiter)))
 	http.HandleFunc("/stats/", gzipMiddleware(rateLimitMiddleware(statsHandler, limiter)))
 	http.HandleFunc("/", gzipMiddleware(rateLimitMiddleware(redirectHandler, limiter)))
+
+	http.Handle("/api/", lb)
 
 	fmt.Println("Server started at :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
