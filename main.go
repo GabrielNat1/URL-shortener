@@ -12,6 +12,8 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -21,6 +23,12 @@ import (
 	"github.com/joho/godotenv"
 	"golang.org/x/time/rate"
 )
+
+type LoadBalancer struct {
+	servers []*url.URL
+	mu      sync.Mutex
+	current int
+}
 
 type gzipResponseWriter struct {
 	io.Writer
@@ -52,6 +60,36 @@ var (
 	urlStore    = make(map[string]Url)
 	lettersRune = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 )
+
+func NewLoadBalancer(serversUrls []string) (*LoadBalancer, error) {
+	var servers []*url.URL
+	for _, s := range serversUrls {
+		url, err := url.Parse(s)
+		if err != nil {
+			return nil, err
+		}
+		servers = append(servers, url)
+	}
+
+	return &LoadBalancer{
+		servers: servers,
+	}, nil
+}
+
+func (lb *LoadBalancer) NextServer() *url.URL {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
+	server := lb.servers[lb.current]
+	lb.current = (lb.current + 1) % len(lb.servers)
+	return server
+}
+
+func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	server := lb.NextServer()
+	proxy := httputil.NewSingleHostReverseProxy(server)
+	proxy.ServeHTTP(w, r)
+}
 
 func (w *gzipResponseWriter) Write(b []byte) (int, error) {
 	return w.Writer.Write(b)
