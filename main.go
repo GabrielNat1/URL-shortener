@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -168,15 +169,31 @@ func (i *IPRateLimiter) GetIP(ip string) *rate.Limiter {
 
 func rateLimitMiddleware(next http.HandlerFunc, limiter *IPRateLimiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		limiter := limiter.GetIP(ip)
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
 
+		limiter := limiter.GetIP(ip)
 		if !limiter.Allow() {
 			http.Error(w, "Too many requests", http.StatusTooManyRequests)
 			return
 		}
 
 		next(w, r)
+	}
+}
+
+func recoverMiddleware(next http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("Recovered from panic: %v", err)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
 	}
 }
 
@@ -204,17 +221,17 @@ func main() {
 		log.Fatal(err)
 	}
 
-	http.HandleFunc("/shorten", gzipMiddleware(rateLimitMiddleware(shorterUrl, limiter)))
-	http.HandleFunc("/stats/", gzipMiddleware(rateLimitMiddleware(statsHandler, limiter)))
-	http.HandleFunc("/", gzipMiddleware(rateLimitMiddleware(redirectHandler, limiter)))
+	http.Handle("/shorten", recoverMiddleware(gzipMiddleware(rateLimitMiddleware(shortenURLHandler, limiter))))
+	http.Handle("/stats/", recoverMiddleware(gzipMiddleware(rateLimitMiddleware(statsHandler, limiter))))
+	http.Handle("/", recoverMiddleware(gzipMiddleware(rateLimitMiddleware(redirectHandler, limiter))))
 
-	http.Handle("/api/", lb)
+	http.Handle("/api/", recoverMiddleware(lb))
 
-	fmt.Println("Server started at :8080")
+	log.Println("Server started at :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func encrypt(initial_url string) string {
+func encrypt(initialURL string) string {
 	// -----------------------------------
 
 	block, err := aes.NewCipher([]byte(secretKey))
@@ -222,7 +239,7 @@ func encrypt(initial_url string) string {
 		log.Fatal(err)
 	}
 
-	plainText := []byte(initial_url)
+	plainText := []byte(initialURL)
 	cipherText := make([]byte, aes.BlockSize+len(plainText))
 
 	iv := cipherText[:aes.BlockSize]
@@ -237,13 +254,13 @@ func encrypt(initial_url string) string {
 	return hex.EncodeToString(cipherText)
 }
 
-func decrypt(encrypted_url string) string {
+func decrypt(encryptedURL string) string {
 	block, err := aes.NewCipher([]byte(secretKey))
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	cipherText, err := hex.DecodeString(encrypted_url)
+	cipherText, err := hex.DecodeString(encryptedURL)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -366,8 +383,8 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(stats)
 }
 
-func shorterUrl(w http.ResponseWriter, r *http.Request) {
-	initial_url := r.URL.Query().Get("url")
+func shortenURLHandler(w http.ResponseWriter, r *http.Request) {
+	initialURL := r.URL.Query().Get("url")
 
 	expirationStr := r.URL.Query().Get("expires_at")
 	expirationMinutes := 24 * 60
@@ -379,31 +396,30 @@ func shorterUrl(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if initial_url == "" {
+	if initialURL == "" {
 		http.Error(w, "URL is required", http.StatusBadRequest)
 		return
 	}
 
-	// => Validate URL format (basic check)
-	if !(strings.HasPrefix(initial_url, "http://") || strings.HasPrefix(initial_url, "https://")) {
+	if !(strings.HasPrefix(initialURL, "http://") || strings.HasPrefix(initialURL, "https://")) {
 		http.Error(w, "Invalid URL format. URL must start with http:// or https://", http.StatusBadRequest)
 		return
 	}
 
-	encrypted_url := encrypt(initial_url)
-	short_id := generateShortId()
+	encryptedURL := encrypt(initialURL)
+	shortID := generateShortId()
 	expiresAt := time.Now().Add(time.Duration(expirationMinutes) * time.Minute).Format(time.RFC3339)
 
 	mu.Lock()
-	urlStore[short_id] = Url{
-		EncryptedURL: encrypted_url,
+	urlStore[shortID] = Url{
+		EncryptedURL: encryptedURL,
 		ExpiresAt:    expiresAt,
 	}
 	mu.Unlock()
 
-	shortUrl := fmt.Sprintf("http://localhost:8080/%s", short_id)
 	/*w.Write([]byte(shortUrl))
 	  fmt.Fprintf(w, "This is the shortened : %s", shortUrl) */
 
-	fmt.Fprintf(w, "This is the shortened URL: %s (expires in %d minutes)", shortUrl, expirationMinutes)
+	shortURL := fmt.Sprintf("http://localhost:8080/%s", shortID)
+	fmt.Fprintf(w, "This is the shortened URL: %s (expires in %d minutes)", shortURL, expirationMinutes)
 }
