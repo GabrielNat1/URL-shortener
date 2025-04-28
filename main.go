@@ -1,12 +1,14 @@
 package main
 
 import (
+	"compress/gzip"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 	"net/http"
@@ -19,6 +21,11 @@ import (
 	"github.com/joho/godotenv"
 	"golang.org/x/time/rate"
 )
+
+type gzipResponseWriter struct {
+	io.Writer
+	http.ResponseWriter
+}
 
 type IPRateLimiter struct {
 	ips map[string]*rate.Limiter
@@ -45,6 +52,26 @@ var (
 	urlStore    = make(map[string]Url)
 	lettersRune = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 )
+
+func (w *gzipResponseWriter) Write(b []byte) (int, error) {
+	return w.Writer.Write(b)
+}
+
+func gzipMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			next(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+
+		gzw := &gzipResponseWriter{Writer: gz, ResponseWriter: w}
+		next(gzw, r)
+	}
+}
 
 func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
 	return &IPRateLimiter{
@@ -104,9 +131,9 @@ func main() {
 
 	cleanupExpiredUrls()
 
-	http.HandleFunc("/shorten", rateLimitMiddleware(shorterUrl, limiter))
-	http.HandleFunc("/stats/", rateLimitMiddleware(statsHandler, limiter))
-	http.HandleFunc("/", rateLimitMiddleware(redirectHandler, limiter))
+	http.HandleFunc("/shorten", gzipMiddleware(rateLimitMiddleware(shorterUrl, limiter)))
+	http.HandleFunc("/stats/", gzipMiddleware(rateLimitMiddleware(statsHandler, limiter)))
+	http.HandleFunc("/", gzipMiddleware(rateLimitMiddleware(redirectHandler, limiter)))
 
 	fmt.Println("Server started at :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
