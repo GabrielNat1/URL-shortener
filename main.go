@@ -220,6 +220,7 @@ func rateLimitMiddleware(next http.HandlerFunc, limiter *IPRateLimiter) http.Han
 		limiter := limiter.GetIP(ip)
 		if !limiter.Allow() {
 			rateLimitExceeded.Inc()
+			log.Printf("Rate limit exceeded for IP %s", ip)
 			http.Error(w, "Too many requests", http.StatusTooManyRequests)
 			return
 		}
@@ -336,11 +337,13 @@ func generateShortId() string {
 
 func redirectHandler(w http.ResponseWriter, r *http.Request) {
 	shortId := r.URL.Path[1:]
+	clientIP, _ := getRealIP(r)
 
 	mu.Lock()
 	urlEntry, ok := urlStore[shortId]
 	expiresAt, err := time.Parse(time.RFC3339, urlEntry.ExpiresAt)
 	if err != nil {
+		log.Printf("Error parsing expiration for %s: %v", shortId, err)
 		http.Error(w, "Invalid expiration format", http.StatusInternalServerError)
 		return
 	}
@@ -348,11 +351,13 @@ func redirectHandler(w http.ResponseWriter, r *http.Request) {
 	if ok && time.Now().After(expiresAt) {
 		delete(urlStore, shortId)
 		mu.Unlock()
+		log.Printf("Attempted access to expired URL %s from %s", shortId, clientIP)
 		http.Error(w, "URL has expired", http.StatusGone)
 		return
 	}
 
 	if !ok {
+		log.Printf("Attempted access to non-existent URL %s from %s", shortId, clientIP)
 		http.Error(w, "URL not found", http.StatusNotFound)
 		return
 	}
@@ -372,6 +377,7 @@ func redirectHandler(w http.ResponseWriter, r *http.Request) {
 	   Decrypt the URL before redirecting */
 	decryptedUrl := decrypt(urlEntry.EncryptedURL)
 	urlRedirects.Inc()
+	log.Printf("Redirecting %s to %s (visit #%d)", shortId, decryptedUrl, urlEntry.Stats.Visits)
 	http.Redirect(w, r, decryptedUrl, http.StatusFound)
 }
 
@@ -386,7 +392,11 @@ func cleanupExpiredUrls() {
 				if time.Now().After(expiresAt) {
 					delete(urlStore, id)
 					deletedCount++
+					log.Printf("Cleaned up expired URL %s", id)
 				}
+			}
+			if deletedCount > 0 {
+				log.Printf("Cleanup complete: removed %d expired URLs", deletedCount)
 			}
 			activeUrls.Sub(float64(deletedCount))
 			mu.Unlock()
@@ -469,6 +479,7 @@ func shortenURLHandler(w http.ResponseWriter, r *http.Request) {
 	mu.Unlock()
 
 	urlsCreated.Inc()
+	log.Printf("Created shortened URL: %s for %s (expires: %s)", shortID, initialURL, expiresAt)
 
 	/*w.Write([]byte(shortUrl))
 	  fmt.Fprintf(w, "This is the shortened : %s", shortUrl) */
