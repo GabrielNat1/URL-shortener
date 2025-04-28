@@ -141,3 +141,12 @@ Returns:
 - Rate limiting prevents abuse
 - Automatic cleanup of expired data
 - Panic recovery for stability
+
+## Metrics
+
+The service exposes Prometheus metrics at `/metrics` endpoint:
+
+- `url_shortener_urls_created_total`: Total number of shortened URLs created
+- `url_shortener_redirects_total`: Total number of redirects performed
+- `url_shortener_active_urls`: Current number of active shortened URLs
+- `url_shortener_rate_limit_exceeded_total`: Total number of rate limit exceeded events

@@ -22,6 +22,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/go-redis/redis/v8"
 	"github.com/joho/godotenv"
 	"golang.org/x/time/rate"
@@ -66,6 +70,26 @@ var (
 	secretKey   string
 	urlStore    = make(map[string]Url)
 	lettersRune = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+
+	urlsCreated = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "url_shortener_urls_created_total",
+		Help: "The total number of shortened URLs created",
+	})
+
+	urlRedirects = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "url_shortener_redirects_total",
+		Help: "The total number of redirects performed",
+	})
+
+	activeUrls = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "url_shortener_active_urls",
+		Help: "The current number of active shortened URLs",
+	})
+
+	rateLimitExceeded = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "url_shortener_rate_limit_exceeded_total",
+		Help: "The total number of rate limit exceeded events",
+	})
 )
 
 func NewCache(Addr string) *Cache {
@@ -195,6 +219,7 @@ func rateLimitMiddleware(next http.HandlerFunc, limiter *IPRateLimiter) http.Han
 
 		limiter := limiter.GetIP(ip)
 		if !limiter.Allow() {
+			rateLimitExceeded.Inc()
 			http.Error(w, "Too many requests", http.StatusTooManyRequests)
 			return
 		}
@@ -244,6 +269,9 @@ func main() {
 	http.Handle("/", recoverMiddleware(gzipMiddleware(rateLimitMiddleware(redirectHandler, limiter))))
 
 	http.Handle("/api/", recoverMiddleware(lb))
+
+	// Add metrics endpoint
+	http.Handle("/metrics", promhttp.Handler())
 
 	log.Println("Server started at :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
@@ -343,6 +371,7 @@ func redirectHandler(w http.ResponseWriter, r *http.Request) {
 	/* Redirect to the original URL
 	   Decrypt the URL before redirecting */
 	decryptedUrl := decrypt(urlEntry.EncryptedURL)
+	urlRedirects.Inc()
 	http.Redirect(w, r, decryptedUrl, http.StatusFound)
 }
 
@@ -351,12 +380,15 @@ func cleanupExpiredUrls() {
 	go func() {
 		for range ticker.C {
 			mu.Lock()
+			deletedCount := 0
 			for id, entry := range urlStore {
 				expiresAt, _ := time.Parse(time.RFC3339, entry.ExpiresAt)
 				if time.Now().After(expiresAt) {
 					delete(urlStore, id)
+					deletedCount++
 				}
 			}
+			activeUrls.Sub(float64(deletedCount))
 			mu.Unlock()
 		}
 	}()
@@ -433,7 +465,10 @@ func shortenURLHandler(w http.ResponseWriter, r *http.Request) {
 		EncryptedURL: encryptedURL,
 		ExpiresAt:    expiresAt,
 	}
+	activeUrls.Inc()
 	mu.Unlock()
+
+	urlsCreated.Inc()
 
 	/*w.Write([]byte(shortUrl))
 	  fmt.Fprintf(w, "This is the shortened : %s", shortUrl) */
